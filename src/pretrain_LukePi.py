@@ -6,7 +6,7 @@ import os
 import torch_geometric.transforms as T
 from loader_norm import HeteroDataset
 from torch_geometric.loader import HGTLoader, NeighborLoader
-
+# from dataloader import DataLoaderMasking 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -34,26 +34,52 @@ def compute_accuracy(target,pred, pred_edge):
    
     target=target.astype(int)
     aucu=roc_auc_score(np.eye(51)[target],scores,multi_class='ovo')
+    # precision_tmp, recall_tmp, _thresholds = precision_recall_curve(target, pred)
+    # aupr = auc(recall_tmp, precision_tmp)
+    f1 = f1_score(target,pred, average='micro', zero_division=0)
+    
+    return aucu,f1
+
+def compute_accuracy_node(target,pred, pred_edge):
+    
+    target=target.clone().detach().cpu().numpy()
+    pred=pred.clone().detach().cpu().numpy()
+    pred_edge=pred_edge.clone().detach().cpu()
+    scores = torch.softmax(pred_edge, 1).numpy()
+   
+    target=target.astype(int)
+    aucu=roc_auc_score(np.eye(9)[target],scores,multi_class='ovo')
+    # precision_tmp, recall_tmp, _thresholds = precision_recall_curve(target, pred)
+    # aupr = auc(recall_tmp, precision_tmp)
     f1 = f1_score(target,pred, average='micro', zero_division=0)
     
     return aucu,f1
 
 
-def train(args, Edge_mask_Negative,model_list, loader, optimizer_model,optimizer_linear_pred_edges, device):
-    model, linear_pred_edges= model_list
+def train(args, Edge_mask_Negative,model_list, loader, optimizer_model,optimizer_linear_pred_edges,optimizer_linear_pred_nodes, device):
+    model, linear_pred_edges,linear_pred_nodes= model_list
     criterion = nn.CrossEntropyLoss()
     model.train()
     linear_pred_edges.train()
+    linear_pred_nodes.train()
     loss_sum = 0
     aucu_sum=0
-    
     f1_sum=0
+    aucu_sum_node=0
+    f1_sum_node=0
+
     for step,batch in enumerate(tqdm(loader, desc="Iteration")):
         batch = batch.to(device)
         batch=Edge_mask_Negative(batch)
         node_rep= model(batch.x_dict, batch.edge_index_dict)
         all_prediction_label=[]
         all_prediction_result=[]
+       
+        all_prediction_label_node=[]
+        all_prediction_result_node=[]
+
+        
+        #--------------LukePi ------------
         for i in range(len(batch.edge_types)):
             prediction_edge=batch[batch.edge_types[i]].prediction_edge
             prediction_label=batch[batch.edge_types[i]].prediction_label
@@ -65,34 +91,59 @@ def train(args, Edge_mask_Negative,model_list, loader, optimizer_model,optimizer
             prediction_result=linear_pred_edges(edge_emb)
             all_prediction_label.append(prediction_label)
             all_prediction_result.append(prediction_result)
-        
+          
+        #---------------node ------------
+        for i in range(len(batch.node_types)):
+            prediction_label_node=batch[batch.node_types[i]].degree_label
+            type_node_emb=node_rep[batch.node_types[i]]
+            prediction_result_node=linear_pred_nodes(type_node_emb)
+            all_prediction_label_node.append(prediction_label_node)
+            all_prediction_result_node.append(prediction_result_node)
+
         optimizer_model.zero_grad()
         optimizer_linear_pred_edges.zero_grad()
+        optimizer_linear_pred_nodes.zero_grad()
+        
         all_prediction_label=torch.cat(all_prediction_label,dim=0).to(device)
         all_prediction_result=torch.cat(all_prediction_result,dim=0)
-        loss = criterion(all_prediction_result,all_prediction_label[:,0].long())
+        #node 
+        all_prediction_label_node=torch.cat(all_prediction_label_node,dim=0).to(device)
+        all_prediction_result_node=torch.cat(all_prediction_result_node,dim=0)
+        loss_edge= criterion(all_prediction_result,all_prediction_label[:,0].long())
+        loss_node=criterion(all_prediction_result_node,all_prediction_label_node[:,0].long())
+      
+        
+        loss=loss_edge+loss_node
+        #Node degree prediction
         all_prediction=torch.max(all_prediction_result.detach(),dim=1)[1]
+        all_prediction_node=torch.max(all_prediction_result_node.detach(),dim=1)[1]
+
         aucu,f1=compute_accuracy(all_prediction_label[:,0],all_prediction,all_prediction_result)
+        aucu_node,f1_node=compute_accuracy_node(all_prediction_label_node[:,0],all_prediction_node,all_prediction_result_node)
         loss.backward()
         optimizer_model.step()
         optimizer_linear_pred_edges.step()
-       
-        
+        optimizer_linear_pred_nodes.step()
         loss_sum += float(loss.cpu().item())
         aucu_sum+=float(aucu)
         # aupr_sum+=float(aupr)
         f1_sum+=float(f1)
+
+
+        aucu_sum_node+=float(aucu_node)
+        f1_sum_node+=float(f1_node)
         
         log = {
             'loss': loss_sum/(step+1),
             'auc':aucu_sum/(step+1),
-            'f1':f1_sum/(step+1)
-
+            'f1':f1_sum/(step+1),
+            'auc_node':aucu_sum_node/(step+1),
+            'f1_node':f1_sum_node/(step+1)
         }
     
 
 
-    # return loss_accum/(step + 1),node_rep,edge_rep
+
     return log
 
 
@@ -122,7 +173,7 @@ def override_config(args):
 
 
 
-def save_model(model, optimizer_model,optimizer_linear_pred_edges,save_variable_list, args):
+def save_model(model, optimizer_model,optimizer_linear_pred_edges,optimizer_linear_pred_nodes,save_variable_list, args):
     '''
     Save the parameters of the model and the optimizer,
     as well as some other variables such as step and learning_rate
@@ -137,7 +188,9 @@ def save_model(model, optimizer_model,optimizer_linear_pred_edges,save_variable_
         **save_variable_list,
         'model_state_dict': model.state_dict(),
         'optimizer_model_state_dict': optimizer_model.state_dict(),
-        'optimizer_classification_state_dict': optimizer_linear_pred_edges.state_dict()},
+        'optimizer_classification_state_dict': optimizer_linear_pred_edges.state_dict(),
+        'optimizer_node_classification_state_dict': optimizer_linear_pred_nodes.state_dict()},
+
         os.path.join(args.Save_model_path, 'checkpoint')
     )
 
@@ -149,7 +202,7 @@ def set_logger(args):
     if args.do_train:
         log_file = os.path.join(args.Save_model_path or args.init_checkpoint, 'train.log') 
     else:
-        log_file = os.path.join(args.Save_model_path or args.init_checkpoint, 'test.log')  # 定义测试日志文件名
+        log_file = os.path.join(args.Save_model_path or args.init_checkpoint, 'test.log')  
     
     logging.basicConfig(
         format='%(asctime)s %(levelname)-8s %(message)s', 
@@ -174,18 +227,18 @@ def log_metrics(mode, step, metrics):
 def main():
     # Training settings
     parser = argparse.ArgumentParser(description='PyTorch implementation of pre-training of graph neural networks')
-    parser.add_argument('--device', type=int, default=0,
+    parser.add_argument('--device', type=int, default=1,
                         help='which gpu to use if any (default: 0)')
     parser.add_argument('--do_train', default=1,type=int)
     parser.add_argument('--kg', default='PrimeKG',type=str)
-    parser.add_argument('--Full_data_path',default='./data/BKG/kgdata.pkl',type=str,help='Data filename to input')
+    parser.add_argument('--Full_data_path',default='../data/kgdata.pkl',type=str,help='Data filename to input')
     parser.add_argument('--method',default='edge_recovery',type=str,help='pre-training method used')
     parser.add_argument('-init', '--init_checkpoint', default=None, type=str)
     parser.add_argument('--batch_size', type=int, default=512,
                         help='input batch size for training (default: 256)')
-    parser.add_argument('--epochs', type=int, default=15,
+    parser.add_argument('--epochs', type=int, default=1,
                         help='number of epochs to train (default: 100)')
-    parser.add_argument('--lr', type=float, default=0.001,
+    parser.add_argument('--lr', type=float, default=0.005,
                         help='learning rate (default: 0.001)')   
     parser.add_argument('--decay', type=float, default=0,
                         help='weight decay (default: 0)')
@@ -206,18 +259,18 @@ def main():
     parser.add_argument('--gnn_type', type=str, default="HGT")
     parser.add_argument('--save_checkpoint_steps', default=5, type=int)
     parser.add_argument('--log_steps', default=1, type=int, help='train log every xx steps')
-    parser.add_argument('--Save_model_path', type=str,default='./pre_trained_model',help='filename to output the model')
-
+    parser.add_argument('--Save_model_path', type=str,default='../pre_trained_model',help='filename to output the model')
+    # parser.add_argument('--model_file_classfication', type=str, default = '../pre_trained_model', help='filename to output the model')
     parser.add_argument('--seed', type=int, default=0, help = "Seed for splitting dataset.")
     parser.add_argument('--num_workers', type=int, default =16, help='number of workers for dataset loading')
     args = parser.parse_args()
     
     #save model path
-
-    args.Save_model_path=args.Save_model_path+'/'+args.method+'/'+args.kg+'_'+args.gnn_type+'_'+str(args.mask_rate)+'_'+str(args.lr)
-    # print(args.Save_model_path)
-    
     # args.device='cpu'
+    args.Save_model_path=args.Save_model_path+'/'+args.method+'/'+args.kg+'_'+args.gnn_type+'_'+str(args.mask_rate)+'_'+str(args.lr)+'_'+str(args.emb_dim)
+    
+    
+
     if (not args.do_train): 
         raise ValueError('one of train/val/test mode must be choosed.')
     if args.init_checkpoint:  
@@ -233,6 +286,8 @@ def main():
     set_logger(args)
     torch.manual_seed(0)
     np.random.seed(0)
+    # device = torch.device("cuda:" + str(args.device)) if torch.cuda.is_available() else torch.device("cpu")
+    # device=torch.device("cpu")
     if torch.cuda.is_available():
         torch.cuda.manual_seed_all(0)
 
@@ -257,11 +312,27 @@ def main():
     for i in range(len(data.node_types)):
         num_repeat=data[data.node_types[i]].x.shape[0]
         data[data.node_types[i]].x =input_node_embeddings(torch.tensor(i)).repeat([num_repeat,1]).detach()
-    
+    # input_node_embeddings = torch.nn.Embedding(num_nodes, 16)
+    # for i in range(len(data.node_types)):
+    # # num_repeat=kgdata[kgdata.node_types[0]].x.shape[0]
+    #     l=data[data.node_types[i]].x
+    #     data[data.node_types[i]].x =torch.squeeze(input_node_embeddings(torch.tensor(l))).detach()
+    #initiliaze the node embeddings for each node
+    # input_node_embeddings = torch.nn.Embedding(num_nodes, 16)
+    # for i in range(len(data.node_types)):
+    # # num_repeat=kgdata[kgdata.node_types[0]].x.shape[0]
+    #     l=data[data.node_types[i]].x
+    #     data[data.node_types[i]].x =torch.squeeze(input_node_embeddings(torch.tensor(l))).detach()
 
     # Pre-training method
     Edge_mask_Negative=EdgeMaskNegative(args.mask_rate,args.device)
   
+    # loader = HGTLoader(data,
+    # # Sample args.samplez_nodes nodes per type and per iteration for args.sample_layers iterations
+    # num_samples={key: [args.sample_nodes] * args.sample_layers for key in data.node_types},
+    # # Use a batch size of 128 for sampling training nodes of type paper
+    # batch_size=args.batch_size,
+    # input_nodes=('gene/protein',torch.ones(data['gene/protein'].x.shape[0],dtype=torch.bool)),num_workers=args.num_workers)
     loader = HGTLoader(data,
     # Sample args.samplez_nodes nodes per type and per iteration for args.sample_layers iterations
     num_samples={key: [args.sample_nodes] * args.sample_layers for key in data.node_types},
@@ -277,14 +348,14 @@ def main():
     
     linear_pred_edges=torch.nn.Sequential(torch.nn.Linear(2*args.emb_dim,args.emb_dim),torch.nn.ReLU(), torch.nn.Linear(args.emb_dim,num_edge_type+1)).to(args.device)
 
-    
+    linear_pred_nodes=torch.nn.Sequential(torch.nn.Linear(args.emb_dim,args.emb_dim),torch.nn.ReLU(), torch.nn.Linear(args.emb_dim,9)).to(args.device)
 
-    model_list = [model, linear_pred_edges]
+    model_list = [model, linear_pred_edges,linear_pred_nodes]
 
     #set up optimizers
     optimizer_model = optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.decay)
     optimizer_linear_pred_edges= optim.Adam(linear_pred_edges.parameters(), lr=args.lr, weight_decay=args.decay)
-   
+    optimizer_linear_pred_nodes= optim.Adam(linear_pred_nodes.parameters(), lr=args.lr, weight_decay=args.decay)
 
     # optimizer_list = [optimizer_model, optimizer_linear_pred_edges]
    
@@ -297,7 +368,7 @@ def main():
         if args.do_train:
             optimizer_model.load_state_dict(checkpoint['optimizer_model_state_dict'])
             optimizer_linear_pred_edges.load_state_dict(checkpoint['optimizer_classification_state_dict'])
-          
+            optimizer_linear_pred_nodes.load_state_dict(checkpoint['optimizer_node_classification_state_dict'])
 
     else:
         logging.info('Ramdomly Initializing %s Model...' % args.gnn_type)  
@@ -310,11 +381,18 @@ def main():
     logging.info('batch_size = %d' % args.batch_size)
     logging.info('sample_nodes = %d' % args.sample_nodes)
     logging.info('sample_layers = %d' % args.sample_layers)
+
+    # epoch_loss,epoch_auc,epoch_f1=train(args,Edge_mask,model_list, loader, optimizer_model,optimizer_linear_pred_edges, args.device)
+    # print(f'epoch_loss:{epoch_loss}')
+    # print(f'epoch_auc:{epoch_auc}')
+    # # print(f'epoch_aupr:{epoch_aupr}')
+    # print(f'epoch_f1:{epoch_f1}')
+
     logging.info('learning_rate = %f' %round(args.lr,4))
 
     training_logs = []
     for step in range(1, args.epochs+1):
-        log= train(args, Edge_mask_Negative,model_list, loader, optimizer_model,optimizer_linear_pred_edges, device=args.device)
+        log= train(args, Edge_mask_Negative,model_list, loader, optimizer_model,optimizer_linear_pred_edges,optimizer_linear_pred_nodes, device=args.device)
         training_logs.append(log)
 
         if step % args.save_checkpoint_steps == 0: # save model
@@ -323,7 +401,7 @@ def main():
                 'current_learning_rate': args.lr,
                 'model':args.gnn_type,
             }
-            save_model(model, optimizer_model,optimizer_linear_pred_edges,save_variable_list, args)
+            save_model(model, optimizer_model,optimizer_linear_pred_edges, optimizer_linear_pred_nodes,save_variable_list, args)
         
     
         #store log information
@@ -341,7 +419,7 @@ def main():
            
         }
     #Save model 
-    save_model(model, optimizer_model,optimizer_linear_pred_edges, save_variable_list, args)
+    save_model(model, optimizer_model,optimizer_linear_pred_edges,optimizer_linear_pred_nodes, save_variable_list, args)
             
 
     
@@ -353,3 +431,4 @@ if __name__ == "__main__":
     main()
     e=time()
     print(f"Total running time: {round(e - s, 2)}s")
+
