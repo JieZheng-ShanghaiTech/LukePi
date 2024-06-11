@@ -65,7 +65,7 @@ class HGT(torch.nn.Module):
 
 
 
-# class GIN(torch.nn.Module):
+ class GIN(torch.nn.Module):
 
     def __init__(self, num_layer, emb_dim, JK = "last", drop_ratio = 0.2, gnn_type='gin'):
         super(GIN, self).__init__()
