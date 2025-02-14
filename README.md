@@ -70,3 +70,16 @@ The classification metrics will be stored in `./result`.
 
 ## 7. Notes
 Due to the limitation of GitHub's file size (< 100mb), we upload the BKG data (`kgdata.pkl`) into Google Driver (https://drive.google.com/drive/folders/1-IMvqc6O_6f4C9vjtFZC918dxycaOqGg?usp=sharing). Please place it in the path of `./data/BKG` before running.
+
+## 8. How to cite LukePi:
+If our work contributes to your research, we kindly encourage you to cite it using the following reference:
+```
+@article{Tao2025,
+  author = {Tao, Siyu and Yang, Yang and Liu, Xin and Feng, Yimiao and Zheng, Jie},
+  title = {Learning Universal Knowledge Graph Embedding for Predicting Biomedical Pairwise Interactions},
+  year = {2025},
+  journal = {bioRxiv},
+  doi = {10.1101/2025.02.10.637419}
+}
+```
+
