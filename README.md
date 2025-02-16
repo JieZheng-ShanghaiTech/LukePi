@@ -74,12 +74,13 @@ Due to the limitation of GitHub's file size (< 100mb), we upload the BKG data (`
 ## 8. How to cite LukePi:
 If our work contributes to your research, we kindly encourage you to cite it using the following reference:
 ```
-@article{Tao2025,
-  author = {Tao, Siyu and Yang, Yang and Liu, Xin and Feng, Yimiao and Zheng, Jie},
-  title = {Learning Universal Knowledge Graph Embedding for Predicting Biomedical Pairwise Interactions},
-  year = {2025},
-  journal = {bioRxiv},
-  doi = {10.1101/2025.02.10.637419}
+@article{tao2025LukePi,
+  title={Learning universal knowledge graph embedding for predicting biomedical pairwise interactions},
+  author={Tao, Siyu and Yang, Yang and Liu, Xin and Feng, Yimiao and Zheng, Jie},
+  journal={bioRxiv},
+  pages={2025--02},
+  year={2025},
+  publisher={Cold Spring Harbor Laboratory}
 }
 ```
 
